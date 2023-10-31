@@ -1,50 +1,80 @@
+version: '3.8'
+x-common:
+  database:
+    &db-environment
+    # Do not remove the "&db-password" from the end of the line below, it is important
+    # for Panel functionality.
+    MYSQL_PASSWORD: &db-password "abinmon@123"
+    MYSQL_ROOT_PASSWORD: "abinmon@123"
+  panel:
+    &panel-environment
+    # This URL should be the URL that your reverse proxy routes to the panel server
+    APP_URL: "https://pterodactyl.example.com"
+    # A list of valid timezones can be found here: http://php.net/manual/en/timezones.php
+    APP_TIMEZONE: "UTC"
+    APP_SERVICE_AUTHOR: "noreply@example.com"
+    TRUSTED_PROXIES: "*" # Set this to your proxy IP
+    # Uncomment the line below and set to a non-empty value if you want to use Let's Encrypt
+    # to generate an SSL certificate for the Panel.
+    # LE_EMAIL: ""
+  mail:
+    &mail-environment
+    MAIL_FROM: "noreply@example.com"
+    MAIL_DRIVER: "smtp"
+    MAIL_HOST: "mail"
+    MAIL_PORT: "1025"
+    MAIL_USERNAME: ""
+    MAIL_PASSWORD: ""
+    MAIL_ENCRYPTION: "true"
+ 
+#
+# ------------------------------------------------------------------------------------------
+# DANGER ZONE BELOW
+#
+# The remainder of this file likely does not need to be changed. Please only make modifications
+# below if you understand what you are doing.
+#
 services:
-  app:
-    stdin_open: true
-    tty: true
-    image: container--pgx7ci
-    build:
-      context: ./src
-    ports:
-      - "5000:5000"
+  database:
+    image: mariadb:10.5
+    restart: always
+    command: --default-authentication-plugin=mysql_native_password
     volumes:
-      - type: bind
-        source: ./src/web
-        target: /usr/src/app
+      - "/srv/pterodactyl/database:/var/lib/mysql"
     environment:
-      ALLOWED_HOSTS: "127.0.0.1,localhost"
-      DATABASE_URL: mysql2=//app_user=password@db=3306/app_database?pool=5&useUnicode=true&characterEncoding=UTF-8
-      DB_ENGINE: django.db.backends.mysql
-      DB_HOST: db
-      DB_NAME: app_database
-      DB_PASSWORD: password
-      DB_PORT: 3306
-      DB_USER: app_user
-      DEBUG: True
-      SECRET_KEY: local_development
-
-
-  db:
-    # This database service is used only for local development
-    # Note: It may be preferable to use an online database service
-    # https://db.anotherwebservice.com/
-    image: mysql
+      <<: *db-environment
+      MYSQL_DATABASE: "panel"
+      MYSQL_USER: "pterodactyl"
+  cache:
+    image: redis:alpine
     restart: always
-    environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_USER: app_user
-      MYSQL_PASSWORD: password
-      MYSQL_DATABASE: app_database
-
-  phpmyadmin:
-    # To view the database during local development
-    # Visit http://127.0.0.1:8080/
-    # Server is: db
-    # Username is same as MYSQL_USER
-    # Password is same as MYSQL_PASSWORD
-    image: phpmyadmin
+  panel:
+    image: ghcr.io/pterodactyl/panel:latest
     restart: always
     ports:
-      - 8080:80
+      - "80:80"
+      - "443:443"
+    links:
+      - database
+      - cache
+    volumes:
+      - "/srv/pterodactyl/var/:/app/var/"
+      - "/srv/pterodactyl/nginx/:/etc/nginx/http.d/"
+      - "/srv/pterodactyl/certs/:/etc/letsencrypt/"
+      - "/srv/pterodactyl/logs/:/app/storage/logs"
     environment:
-      PMA_ARBITRARY: "1"
+      <<: [*panel-environment, *mail-environment]
+      DB_PASSWORD: *db-password
+      APP_ENV: "production"
+      APP_ENVIRONMENT_ONLY: "false"
+      CACHE_DRIVER: "redis"
+      SESSION_DRIVER: "redis"
+      QUEUE_DRIVER: "redis"
+      REDIS_HOST: "cache"
+      DB_HOST: "database"
+      DB_PORT: "3306"
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
